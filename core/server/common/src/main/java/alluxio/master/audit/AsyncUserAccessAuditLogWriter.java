@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Preconditions;
 
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -35,10 +36,11 @@ public final class AsyncUserAccessAuditLogWriter {
   private static final Logger AUDIT_LOG =
       LoggerFactory.getLogger("AUDIT_LOG");
   private volatile boolean mStopped;
+
   /**
-   * A thread-safe linked-list-based queue with an optional capacity limit.
+   * A thread-safe blocking-based queue with a capacity limit.
    */
-  private LinkedBlockingQueue<AuditContext> mAuditLogEntries;
+  private BlockingQueue<AuditContext> mAuditLogEntries;
 
   /**
    * Background thread that performs actual log writing.
@@ -95,6 +97,11 @@ public final class AsyncUserAccessAuditLogWriter {
    */
   public boolean append(AuditContext context) {
     try {
+      if (mAuditLogEntries.remainingCapacity() == 0) {
+        LOG.warn("Current queue size is {}, remaining capacity is 0. "
+            + "Consider increasing alluxio.master.audit.logging.queue.capacity.",
+            mAuditLogEntries.size());
+      }
       mAuditLogEntries.put(context);
     } catch (InterruptedException e) {
       // Reset the interrupted flag and return because some other thread has
