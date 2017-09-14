@@ -97,11 +97,6 @@ public final class AsyncUserAccessAuditLogWriter {
    */
   public boolean append(AuditContext context) {
     try {
-      if (mAuditLogEntries.remainingCapacity() == 0) {
-        LOG.warn("Current queue size is {}, remaining capacity is 0. "
-            + "Consider increasing alluxio.master.audit.logging.queue.capacity.",
-            mAuditLogEntries.size());
-      }
       mAuditLogEntries.put(context);
     } catch (InterruptedException e) {
       // Reset the interrupted flag and return because some other thread has
