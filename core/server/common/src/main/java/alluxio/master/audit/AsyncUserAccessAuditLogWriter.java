@@ -17,10 +17,8 @@ import alluxio.PropertyKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Preconditions;
-
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.Collections;
+import java.util.List;
 import javax.annotation.concurrent.ThreadSafe;
 
 /**
@@ -30,7 +28,6 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public final class AsyncUserAccessAuditLogWriter {
-  private static final String AUDIT_LOG_THREAD_NAME = "AsyncUserAccessAuditLogger";
   private static final Logger LOG =
       LoggerFactory.getLogger(AsyncUserAccessAuditLogWriter.class);
   private static final Logger AUDIT_LOG =
@@ -38,21 +35,10 @@ public final class AsyncUserAccessAuditLogWriter {
   private volatile boolean mStopped;
 
   /**
-   * A thread-safe blocking-based queue with a capacity limit.
-   */
-  private BlockingQueue<AuditContext> mAuditLogEntries;
-
-  /**
-   * Background thread that performs actual log writing.
-   */
-  private Thread mLoggingWorkerThread;
-
-  /**
    * Constructs an {@link AsyncUserAccessAuditLogWriter} instance.
    */
   public AsyncUserAccessAuditLogWriter() {
     int queueCapacity = Configuration.getInt(PropertyKey.MASTER_AUDIT_LOGGING_QUEUE_CAPACITY);
-    mAuditLogEntries = new LinkedBlockingQueue<>(queueCapacity);
     LOG.info("Audit logging queue capacity is {}.", queueCapacity);
     mStopped = true;
   }
@@ -62,11 +48,8 @@ public final class AsyncUserAccessAuditLogWriter {
    */
   public synchronized void start() {
     if (mStopped) {
-      Preconditions.checkState(mLoggingWorkerThread == null);
       mStopped = false;
-      mLoggingWorkerThread = new Thread(new AuditLoggingWorker());
-      mLoggingWorkerThread.setName(AUDIT_LOG_THREAD_NAME);
-      mLoggingWorkerThread.start();
+      enableAsyncAuditAppender();
       LOG.info("AsyncUserAccessAuditLogWriter thread started.");
     }
   }
@@ -76,16 +59,8 @@ public final class AsyncUserAccessAuditLogWriter {
    */
   public synchronized void stop() {
     if (!mStopped) {
-      mLoggingWorkerThread.interrupt();
-      try {
-        mLoggingWorkerThread.join();
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      } finally {
-        mStopped = true;
-        mLoggingWorkerThread = null;
-        LOG.info("AsyncUserAccessAuditLogWriter thread stopped.");
-      }
+      mStopped = true;
+      LOG.info("AsyncUserAccessAuditLogWriter stopped.");
     }
   }
 
@@ -96,34 +71,24 @@ public final class AsyncUserAccessAuditLogWriter {
    * @return true if append operation succeeds, false otherwise
    */
   public boolean append(AuditContext context) {
-    try {
-      mAuditLogEntries.put(context);
-    } catch (InterruptedException e) {
-      // Reset the interrupted flag and return because some other thread has
-      // told us not to wait any more.
-      Thread.currentThread().interrupt();
-      return false;
-    }
+    AUDIT_LOG.info(context.toString());
     return true;
   }
 
-  /**
-   * Consumer thread of the queue to perform actual logging of audit info.
-   */
-  private class AuditLoggingWorker implements Runnable {
-    public AuditLoggingWorker() {}
-
-    @Override
-    public void run() {
-      while (!mStopped) {
-        try {
-          AuditContext headContext = mAuditLogEntries.take();
-          AUDIT_LOG.info(headContext.toString());
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          break;
-        }
+  private void enableAsyncAuditAppender() {
+    org.apache.log4j.Logger logger = org.apache.log4j.Logger.getLogger("AUDIT_LOG");
+    List<org.apache.log4j.Appender> appenders = Collections.list(logger.getAllAppenders());
+    // failsafe against trying to async it more than once
+    if (!appenders.isEmpty() && !(appenders.get(0) instanceof org.apache.log4j.AsyncAppender)) {
+      org.apache.log4j.AsyncAppender asyncAppender = new org.apache.log4j.AsyncAppender();
+      // change logger to have an async appender containing all the
+      // previously configured appenders
+      for (org.apache.log4j.Appender appender : appenders) {
+        logger.removeAppender(appender);
+        asyncAppender.addAppender(appender);
       }
+      logger.addAppender(asyncAppender);
+      LOG.info("Async appender added.");
     }
   }
 }
